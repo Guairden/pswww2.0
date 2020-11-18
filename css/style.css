@@ -1,0 +1,8 @@
+body, html {
+  height: 100%;
+}
+
+#lstopo {
+  padding: 0;
+  margin: 0 auto;
+}
