@@ -6,3 +6,23 @@ body, html {
   padding: 0;
   margin: 0 auto;
 }
+
+.animate {
+  transition: all .5s;
+}
+
+.expanded {
+  transform: translateY(300)
+}
+
+rect {
+  transition: all 700ms ease-in-out;
+}
+
+text {
+  transition: all 700ms ease-in-out;
+}
+
+line {
+  transition: all 700ms ease-in-out;
+}
