@@ -103,3 +103,13 @@ circle {
 0% {opacity:1;}
 100% {opacity:0;}
 }
+
+.blink {
+  animation: blinker 1s linear infinite;
+}
+
+@keyframes blinker {
+  50% {
+    opacity: 0;
+  }
+}

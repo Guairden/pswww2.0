@@ -7,15 +7,15 @@ let focusedProcess = null;
 let parseString = require('xml2js').parseString;
 let mainWindow;
 
-setSocketHandler();
-setGlobalVariables();
 setMenu();
+setSocketHandler();
 setAppHandler();
+setGlobalVariables();
 app.whenReady().then( () => {
   mainWindow = createWindow(800, 600, './html/index.html', true)
 });
 
-function createWindow (width, height, filePath, frame) {
+function createWindow(width, height, filePath, frame) {
   const win = new BrowserWindow({
     width: width,
     height: height,
@@ -38,6 +38,7 @@ function setAppHandler() {
   })
 
   ipcMain.on('hwloc-bind', (event, pid, runner) => {
+    console.log(pid, runner)
     new Promise((resolve, reject) => {
       socket.emit('hwloc-bind', pid, runner, (err, response) => {
         if (err)
@@ -47,7 +48,7 @@ function setAppHandler() {
       });
     }).then((response) => {
       event.returnValue = response;
-      socket.emit('hwloc-ps', '-a -t ' + (focusedProcess ? '--pid ' + focusedProcess : ''));
+      socket.emit('hwloc-ps', getPsArgs());
     }).catch((error) => {
       console.error(error, 'Promise error');
       event.returnValue = false;
@@ -64,20 +65,28 @@ function setAppHandler() {
       });
     }).then((response) => {
       event.returnValue = response;
-      socket.emit('hwloc-ps', '-a -t ' + (focusedProcess ? '--pid ' + focusedProcess : ''));
+      socket.emit('hwloc-ps', getPsArgs() );
     }).catch((error) => {
       console.error(error, 'Promise error');
       event.returnValue = false;
     });
   });
 
-  ipcMain.on('setProcesseFocus', (event, process) => {
-    setProcesseFocus(process);
-    mainWindow.reload();
+  ipcMain.on('setProcessFocus', (event, process) => {
+    setProcessFocus(process);
   });
 
-  ipcMain.on('closeWindowModal', (event) => {
+  ipcMain.on('closeWindowModal', (event, reload) => {
     closeWindowModal();
+    if ( reload )
+      mainWindow.reload();
+  });
+
+  ipcMain.on('check-mpi-binding-error', (event) => {
+    if ( error = IsMpiBindingWrong(global.processes) )
+      mainWindow.webContents.send('mpi-binding-error', error);
+    else
+      mainWindow.webContents.send('mpi-binding-correct');
   });
 }
 
@@ -98,16 +107,19 @@ function setSocketHandler() {
     });
   });
 
-  socket.on('hwloc-ps', (msg) => {
+  socket.on('hwloc-ps', (msg, reload) => {
     console.log(msg)
-    global.processes = msg;
+    global.processes = getProcesses(msg.processes);
+    if ( reload )
+      mainWindow.reload();
   });
 }
 
 function setGlobalVariables() {
   socket.emit('get_xml', '');
   socket.emit('get_svg', '');
-  socket.emit('hwloc-ps', '-a -t');
+  socket.emit('hwloc-ps', getPsArgs(), true);
+  global.showProcesses = true;
 }
 
 function setMenu() {
@@ -211,12 +223,15 @@ function setMenu() {
       label: 'Options',
       submenu: [
         {
+          id: 'threads',
           label: 'Threads',
           type: 'checkbox',
           click: (item) => {
             if ( item.checked ) {
+              item.menu.getMenuItemById('mpi-mode').checked = false;
               global.showThreads = true;
-              mainWindow.reload();
+              global.mpiMode = false;
+              socket.emit('hwloc-ps', getPsArgs(), true);
             } else {
               global.showThreads = false;
               mainWindow.reload();
@@ -244,13 +259,20 @@ function setMenu() {
           checked: false,
           click: (item) => {
             if ( item.checked ) {
+              item.menu.getMenuItemById('threads').checked = true;
+              global.showThreads = true;
+
+              if (item.menu.getMenuItemById('mpi-mode').checked = true) {
+                item.menu.getMenuItemById('mpi-mode').checked = false;
+                global.mpiMode = false;
+                socket.emit('hwloc-ps', getPsArgs(), false);
+              }
+              
               global.windowModal = createWindow(400, 200, './html/process-focus.html', false);
             } else {
               focusedProcess = null;
-              socket.emit('hwloc-ps', '-a -t');
-              mainWindow.reload();
+              socket.emit('hwloc-ps', getPsArgs(), true);
             }
-              
           }
         },
         {
@@ -260,13 +282,15 @@ function setMenu() {
           checked: false,
           click: (item) => {
             if ( item.checked ) {
-              socket.emit('hwloc-ps', '--pid-cmd ./get-mpi-rank.sh');
+              item.menu.getMenuItemById('process-focus').checked = false;
+              item.menu.getMenuItemById('threads').checked = false;
+              focusedProcess = null;
+              global.showThreads = false;
               global.mpiMode = true;
-              mainWindow.reload();
+              socket.emit('hwloc-ps', getPsArgs(), true);
             } else {
-              socket.emit('hwloc-ps', '-a -t');
               global.mpiMode = false;
-              mainWindow.reload();
+              socket.emit('hwloc-ps', getPsArgs(), true);
             }
           }
         }
@@ -278,18 +302,106 @@ function setMenu() {
   Menu.setApplicationMenu(menu)
 }
 
-function setProcesseFocus(process) {
-  let processesObject = { processes: new Array() }
+function closeWindowModal() {
+  if ( !focusedProcess )
+    Menu.getApplicationMenu().getMenuItemById('process-focus').checked = false;
+  
+  windowModal.close();
+  global.windowModal = null;
+  
+}
 
-  processesObject.processes.push(process)
+function getPsArgs() {
+  if ( focusedProcess )
+    return '-t --pid ' + focusedProcess;
+  else if ( global.mpiMode )
+    return '--pid-cmd ./get-mpi-rank.sh';
+  else
+    return '-a -t';
+}
+
+
+function getProcesses(processes) {
+  let processesByObject = new Object();
+  let processName = "";
+  let error;
+
+  for ( process of processes ) {
+    processName = process.name;
+    if ( processName.split(' ').length > 1 ) {
+      processesByObject = setBindedThreadByRunner(processesByObject, process);
+      processName = process.name.split(' ')[0];
+    }
+
+    let runnerId = processName.replace(':', '_') + '_rect';
+    processesByObject = setProcessesByRunner(processesByObject, process, runnerId);
+  }
+
+  if ( global.mpiMode ) {
+    if (  error = IsMpiBindingWrong(processesByObject) )
+      mainWindow.webContents.send('mpi-binding-error', error);
+    else
+      mainWindow.webContents.send('mpi-binding-correct');
+  }
+    
+
+  return processesByObject;
+}
+
+function setProcessesByRunner(processesByObject, process, runnerId) {
+  if ( processesByObject && !processesByObject[runnerId] )
+    processesByObject[runnerId] = new Array();
+
+  processesByObject[runnerId].push(process);
+  return processesByObject;
+}
+
+function setProcessFocus(process) {
+  let processesObject = {}
+  global.processes
+  processName = process.name;
+  if ( processName.split(' ').length > 1 ) {
+    processName = process.name.split(' ')[0];
+    processesObject[processName.replace(':', '_') + ('_rect')] = new Array(process);
+    global.processes = processesObject;
+    focusedProcess = process.PID;
+    
+    global.processes = setBindedThreadByRunner(global.processes, process);
+  }
+
+  processesObject[processName.replace(':', '_') + ('_rect')] = new Array(process)
   global.processes = processesObject;
   focusedProcess = process.PID;
 }
 
-function closeWindowModal() {
-  if ( !focusedProcess )
-    Menu.getApplicationMenu().getMenuItemById('process-focus').checked = false;
+function setBindedThreadByRunner(processesByObject, parentProcess) {
+  for ( let thread of parentProcess.threads) {
+    if ( parentProcess.name.split(' ').slice(1).includes(thread.name) ) {
+      let runnerId = thread.name.replace(':', '_') + '_rect';
+      thread.isBindedThread = true;
+      processesByObject = setProcessesByRunner(processesByObject, thread, runnerId);
+    }
+  }
+  return processesByObject;
+}
 
-  windowModal.close();
-  global.windowModal = null;
+function IsMpiBindingWrong(processesByRunner) {
+  for (const runner in processesByRunner) {
+    if ( processesByRunner[runner].length > 1 ) {
+      let processesInfo = {ids: new Array(), mpiRanks: new Array()};
+      for (process of processesByRunner[runner]) {
+        processesInfo.ids.push(process.PID);
+        processesInfo.mpiRanks.push(process.mpiRank);
+      }
+
+      return 'Multiple processes binded on ' + runner.toString().replace('_rect','').replace('_',':') 
+        + '. Processes IDs are ' + processesInfo.ids.join(', ') 
+        + ' and mpi ranks are ' + processesInfo.mpiRanks.join(', ') 
+        + '. Circles might miss informations, please uncheck the mpi mode or fix this issue.'
+        + ' You can still use this app to fix your binding.';
+    }
+      
+  }
+
+  return null;
 }

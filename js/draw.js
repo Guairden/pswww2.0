@@ -6,6 +6,7 @@ function showElementInfo(xml, svgContent, svgRoot, boxes, texts, bridges, elemen
     }
 
     let xmlInfos = getElementXmlInfo(element, xml.topology);
+    console.log(xmlInfos)
     let processesInfos = getElementProcessesInfo(svgRoot, element);
     let infos = { xml: xmlInfos['$'], processes: processesInfos };
     let circles = svgContent.getElementsByTagName('circle');
@@ -213,12 +214,15 @@ function drawInfos(svgRoot, infos, element) {
   function drawProcessInfos(processes) {
     for ( process of processes ) {
       if ( process.isBindedThread ) {
-        textContent = '        ' + process.name + ' ' + process.object + ' ' + process.TID;
-        drawText(textContent, true, process.TID);
+        if ( remote.getGlobal('showThreads') ) {
+          textContent = '        ' + process.name + ' ' + process.object + ' ' + process.TID;
+          drawText(textContent, true, process.TID);
+        }
       } else {
-        textContent = '    ' + process.name + ' ' + process.object + ' ' + process.PID;
+        textContent = '    ' + process.name + ' ' + process.object + ' ' + process.PID + 
+          ( remote.getGlobal('mpiMode') ? ' - MPI Rank : ' + process.mpiRank : '' );
         drawText(textContent, true);
-        if ( remote.getGlobal("showThreads") && process.threads.length > 0 )
+        if ( remote.getGlobal('showThreads') && process.threads.length > 0 )
           drawThreadInfos(process.threads, process);
       }
     }
@@ -327,16 +331,26 @@ function addStyle(svgRoot) {
   }
 }
 
+function drawProcesses(svgRoot, processesByRunner) {
+  for ( let runner in processesByRunner ) {
+    for ( let process of processesByRunner[runner] ) {
+      let svgRunner = svgRoot.getElementById(runner);
+      if ( !process.isBindedThread ) 
+        drawBulletProcess(svgRoot, svgRunner, process)
+    }
+  }
+}
+
 function drawBulletProcess(svgRoot, runner, process) {
-  if ( remote.getGlobal("showThreads") && process.threads.length > 0 )
+  if ( remote.getGlobal("showThreads") && process.threads && process.threads.length > 0 )
     drawBulletThread(svgRoot, process.threads);
   
   if ( !runner.getAttribute('process') ) {
     drawBulletCircle(svgRoot, runner);
-    drawBulletText(svgRoot, runner);
+    drawBulletText(svgRoot, runner, null, process.mpiRank);
     runner.setAttribute('process', 1);
   } else {
-    addBullet(svgRoot, runner);
+    addBullet(svgRoot, runner, null, process.mpiRank);
   }
 }
 
@@ -361,9 +375,6 @@ function drawBulletCircle(svgRoot, runner, isThread) {
   bulletCircle.setAttribute('circle', true);
   bulletCircle.setAttribute('stroke', 'rgb(0,0,0)');
   bulletCircle.setAttribute('stroke-width', '1');
-  bulletCircle.setAttribute('PID', process.PID);
-  bulletCircle.setAttribute('name', process.name);
-  bulletCircle.setAttribute("object", process.object);
 
   if ( runner.getAttribute('transform') ) {
     let transform = runner.getAttribute('transform').substring(10, runner.getAttribute('transform').length - 1).split(',');
@@ -377,22 +388,22 @@ function drawBulletCircle(svgRoot, runner, isThread) {
   if ( isThread ) {
     bulletCircle.setAttribute('r', 10);
     bulletCircle.setAttribute('cx', parseInt(runner.getAttribute('x')) + 46);
-    bulletCircle.setAttribute('fill', 'rgb(220, 220, 0)');
+    bulletCircle.setAttribute('fill', '#ff9980  ');
     bulletCircle.setAttribute('id', runner.getAttribute('id') + '_bulletCircleThread');
   } else {
     bulletCircle.setAttribute('r', 12);
     bulletCircle.setAttribute('cx', parseInt(runner.getAttribute('x')) + 14);
-    bulletCircle.setAttribute('fill', 'rgb(220, 220, 220)');
+    bulletCircle.setAttribute('fill', '#ff4d4d');
     bulletCircle.setAttribute('id', runner.getAttribute('id') + '_bulletCircle');
   }
 
   svgRoot.appendChild(bulletCircle);
 }
 
-function drawBulletText(svgRoot, runner, isThread) {
+function drawBulletText(svgRoot, runner, isThread, mpiRank) {
   let bulletText= document.createElementNS("http://www.w3.org/2000/svg","text");
   bulletText.setAttribute('y', parseInt(runner.getAttribute('y')) + 13.5);
-  bulletText.textContent = '1';
+  bulletText.textContent = mpiRank ? mpiRank : '1';
 
   if ( runner.getAttribute('transform') ) {
     let transform = runner.getAttribute('transform').substring(10, runner.getAttribute('transform').length - 1).split(',');
@@ -416,12 +427,12 @@ function drawBulletText(svgRoot, runner, isThread) {
   svgRoot.appendChild(bulletText);
 }
 
-function addBullet(svgRoot, runner, isThread, nbToAdd = 1) {
+function addBullet(svgRoot, runner, isThread, mpiRank, nbToAdd = 1) {
   let runnerId = runner.getAttribute('id');
   let bulletCircle = svgRoot.getElementById(runnerId + '_bulletCircle' + (isThread ? "Thread" : ""));
   let bulletText = svgRoot.getElementById(runnerId + '_bulletText' + (isThread ? "Thread" : ""));
 
-  bulletText.textContent = parseInt(bulletText.textContent) + nbToAdd;
+  bulletText.textContent = mpiRank ? mpiRank : parseInt(bulletText.textContent) + nbToAdd;
   runner.setAttribute(isThread ? 'thread' : 'process', parseInt(runner.getAttribute('process')) + nbToAdd);
 
   if(parseInt(bulletText.textContent) >= 1000) {
@@ -436,15 +447,22 @@ function addBullet(svgRoot, runner, isThread, nbToAdd = 1) {
   }
 }
 
-function removeBullet(svgRoot, runner, isThread, nbToDelete = 1) {
+function removeBullet(svgRoot, runner, isThread, mpiRank, nbToDelete = 1) {
   let runnerId = runner.getAttribute('id');
   let bulletCircle = svgRoot.getElementById(runnerId + '_bulletCircle' + (isThread ? "Thread" : ""));
   let bulletText = svgRoot.getElementById(runnerId + '_bulletText' + (isThread ? "Thread" : ""));
+  let text;
 
-  bulletText.textContent = parseInt(bulletText.textContent) - nbToDelete;
-  runner.setAttribute(isThread ? 'thread' : 'process', parseInt(runner.getAttribute('process')) - nbToDelete);
+  if ( mpiRank &&  runner.getAttribute(isThread ? 'thread' : 'process') > 1 ) {
+    text = getMpiRankByRunner(runnerId, mpiRank);
+  } else {
+    text = parseInt(bulletText.textContent) - nbToDelete;
+    runner.setAttribute(isThread ? 'thread' : 'process', parseInt(runner.getAttribute('process')) - nbToDelete);
+  }
+  bulletText.textContent = text;
+  
 
-  if ( parseInt(bulletText.textContent) == 0 ) {
+  if ( ( isThread && bulletText.textContent <= 0 ) || ( !isThread && runner.getAttribute(isThread ? 'thread' : 'process') == 0 ) ) {
     runner.removeAttribute(isThread ? 'thread' : 'process');
     bulletCircle.remove();
     bulletText.remove();
@@ -461,7 +479,6 @@ function removeBullet(svgRoot, runner, isThread, nbToDelete = 1) {
     }
   }
 }
-
 
 function unHighlightBox(box) {
   let oldColor = box.getAttribute('id').includes('PU') ? 'rgb(222,222,222)' : 'rgb(190,190,190)';
@@ -541,32 +558,39 @@ function makeDraggable(svgRoot, svgContent) {
   function endDrag(evt) {
     if ( !bullet )
       return;
+
+    let selectedElementParentId = selectedElement.getAttribute('parent_id');
+    let selectedElementParent = svgRoot.getElementById(selectedElementParentId);
+    let isThread = selectedElement.classList.contains('thread');
+    let targetBoxBullet = svgRoot.getElementById(targetBox.getAttribute('id') + '_bulletCircle' + (isThread ? 'Thread' : ''));
+    let processInfos = selectedElement.textContent.split(' ');
+    let processIdPos = selectedElement.classList.contains('thread') ? 11 : ( processInfos.length == 7 || processInfos.length == 12 ? 6 : 7);
+    let processId = processInfos[processIdPos];
+    let process;
     
-    if ( targetBox && hwlocBind(selectedElement, targetBox) ) {
-      let selectedElementParentId = selectedElement.getAttribute('parent_id');
-      let selectedElementParent = svgRoot.getElementById(selectedElementParentId);
-      let isThread = selectedElement.classList.contains('thread');
-      let targetBoxBullet = svgRoot.getElementById(targetBox.getAttribute('id') + '_bulletCircle' + (isThread ? 'Thread' : ''));
-      
+    if ( targetBox && selectedElementParent != targetBox && hwlocBind(processId, targetBox, selectedElement.classList.contains('thread')) ) {
+      process = getProcessById(processId)
+
       if ( !targetBoxBullet ) {
         drawBulletCircle(svgRoot, targetBox, isThread);
-        drawBulletText(svgRoot, targetBox, isThread);
+        drawBulletText(svgRoot, targetBox, isThread, process ? process.mpiRank : null);
         targetBox.setAttribute(isThread ? 'thread' : 'process', 1);
       } else {
-        addBullet(svgRoot, targetBox, isThread);
+        addBullet(svgRoot, targetBox, isThread, process ? process.mpiRank : null);
       }
       
       if ( !selectedElement.classList.contains('thread') ) {
         moveThreadChildren(svgRoot, selectedElementParent, targetBox, selectedElement);
         removeSelectedElementChildren(selectedElement);
       }
-      removeBullet(svgRoot, selectedElementParent, isThread);
+
+      removeBullet(svgRoot, selectedElementParent, isThread, process ? process.mpiRank : null);
       selectedElement.remove();
 
     } else {
       svgRoot.append(selectedElement);
     }
-    
+
     unHighlightBox(targetBox);
     bullet.remove();
     selectedElement = null;
@@ -619,12 +643,10 @@ function targetIsCoreOrPU(svgContent, offset) {
   return null;
 }
 
-function hwlocBind(processInfo, runner) {
-  let processInfos = processInfo.textContent.split(' ');
-  let processId = processInfos[processInfos.length - 1];
+function hwlocBind(processId, runner, isThread) {
   let runnerName = runner.getAttribute('id').replace('_rect', '').replace('_', ':');
   
-  if ( !processInfo.classList.contains('thread') )
+  if ( !isThread )
     return ipcRenderer.sendSync('hwloc-bind', processId, runnerName);
   else
     return ipcRenderer.sendSync('hwloc-bind-thread', processId, runnerName);
@@ -639,32 +661,51 @@ function moveThreadChildren(svgRoot, oldRunner, newRunner, processInfo) {
     return
 
   if ( process.threads.length > 0 ) {
-    removeBullet(svgRoot, oldRunner, true, process.threads.length);
+    removeBullet(svgRoot, oldRunner, true, null, process.threads.length);
   }
   
   if ( !newRunner.getAttribute('thread') ) {
     drawBulletCircle(svgRoot, newRunner, true);
     drawBulletText(svgRoot, newRunner, true);
     newRunner.setAttribute('thread', 1);
-    addBullet(svgRoot, newRunner, true, process.threads.length - 1);
+    addBullet(svgRoot, newRunner, true, null, process.threads.length - 1);
   } else {
-    addBullet(svgRoot, newRunner, true, process.threads.length);
+    addBullet(svgRoot, newRunner, true, process.mpiRank, process.threads.length);
   }
-  
+ 
+}
+
+function drawErrorSign(svgRoot, error) {
+  const machine = svgRoot.getElementById('Machine_0_rect');
+  const warning = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+  const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+
+  warning.setAttribute('x', parseInt(machine.getAttribute('x')) + 300);
+  warning.setAttribute('y', parseInt(machine.getAttribute('y')) + 2);
+  warning.setAttribute('width', 20);
+  warning.setAttribute('height', 20);
+  warning.setAttribute('href', '../img/warning.svg');
+  warning.setAttribute('id', 'warning');
+  warning.classList.add('blink');
+
+  title.textContent = error;
+
+  warning.appendChild(title);
+  svgRoot.append(warning);
+}
+
+function eraseErrorSign(svgRoot) {
+  const warning = svgRoot.getElementById('warning');
+
+  if ( warning )
+    warning.remove();
 }
 
 // FRONT
-// TODO : Needs to reload on start ==> await ?
-// TODO : mpi mode switch to fast doesn't work ==> await socket response ?
-
-// TODO : process / Thread color + highlight color
-
-// TODO : mpi mode bullet
-// TODO : mpi mode binding (retrieving real PID)
+// TODO : circles with mpi binding error
 
 // HWLOC-PS
 // TODO : last cpulocation
-// TODO : MPI RANK
 
 // PSWWW2 :
 // TODO : parent_id complement ?!

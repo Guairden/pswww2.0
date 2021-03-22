@@ -26,15 +26,15 @@ function getTextChildren(svgRoot, element) {
 }
 
 function getElementXmlInfo(element, parent) {
-  if(element.getAttribute('gp_index') == parent['$'].gp_index)
+  if ( element.getAttribute('gp_index') == parent['$'].gp_index )
       return parent;
 
-  else if (!parent.object)
+  else if ( !parent.object )
     return null;
   
-  for(child of parent.object) {
+  for ( child of parent.object ) {
       let returnObject = getElementXmlInfo(element, child);
-      if (returnObject)
+      if ( returnObject )
         return returnObject;
   }
 
@@ -58,27 +58,10 @@ function getInfoValue(key, value) {
   }
 }
 
-function getProcesses(svgRoot, drawBulletProcess = null) { 
-  let processes = remote.getGlobal("processes");
-  let processesByObject = new Object();
-  let processName = "";
+function getProcessesByRunner() { 
+  let processesByRunner = remote.getGlobal("processes");
 
-  for ( process of processes.processes ) {
-    processName = process.name;
-    if ( processName.split(' ').length > 1 ) {
-      processesByObject = setBindedThreadByRunner(processesByObject, process);
-      processName = process.name.split(' ')[0];
-    }
-
-    let runnerId = processName.replace(':', '_') + '_rect';
-    let runner = svgRoot.getElementById(runnerId);
-    processesByObject = setProcessesByRunner(processesByObject, process, runnerId);
-
-    if ( drawBulletProcess )
-      drawBulletProcess(svgRoot, runner, process)
-  }
-
-  return processesByObject;
+  return processesByRunner;
 }
 
 function setProcessesByRunner(processesByObject, process, runnerId) {
@@ -101,20 +84,30 @@ function setBindedThreadByRunner(processesByObject, parentProcess) {
 }
 
 function getElementProcessesInfo(svgRoot, element) {
-  let processes = getProcesses(svgRoot);
+  let processes = remote.getGlobal('processes');
+  
   if ( processes[element.id] )
     return processes[element.id];
+
 
   return null;
 }
 
 function getProcessById(pid) {
   let processes = remote.getGlobal("processes");
-  
-  for ( process of processes.processes ) {
-    if ( process.PID === pid )
-      return process;
+  for ( const runner in processes ) {
+    for ( let process of processes[runner]) {
+      if ( process.PID == pid )
+        return process;
+    }
   }
+}
 
-  return null;
+function getMpiRankByRunner(runner, mpiRank) {
+  let processes = remote.getGlobal('processes');
+  for ( process of processes[runner] ) {
+    if ( process.mpiRank != mpiRank )
+      return process.mpiRank;
+  }
+  
 }

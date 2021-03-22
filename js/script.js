@@ -8,9 +8,21 @@ svg.addEventListener('load', function (e) {
   const boxes = svgContent.getElementsByTagName('rect');
   const texts = svgContent.getElementsByTagName('text');
   const bridges = svgContent.getElementsByTagName('line');
+  const processesByRunner = remote.getGlobal('processes');
 
-  getProcesses(svgRoot, drawBulletProcess);
+  if( remote.getGlobal('showProcesses') )
+    drawProcesses(svgRoot, processesByRunner);
 
+  if( remote.getGlobal('mpiMode') ) {
+    ipcRenderer.send('check-mpi-binding-error')
+    ipcRenderer.on('mpi-binding-error', (event, error) => {
+      drawErrorSign(svgRoot, error);
+    })
+    ipcRenderer.on('mpi-binding-correct', () => {
+      eraseErrorSign(svgRoot);
+    })
+  }
+    
   makeDraggable(svgRoot, svgContent);
   addStyle(svgRoot);
 
